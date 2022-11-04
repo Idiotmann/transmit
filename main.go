@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -37,11 +38,15 @@ func main() {
 		//})
 		//把所有静态文件变成一个变量  获得一个子文件系统 子文件系统的根由第二个参数 dir 指定
 		staticFiles, _ := fs.Sub(FS, "frontend/dist")
+
 		//获取接口
+		router.GET("/api/v1/addresses", AddressesController)
+		//下载文件
+		router.GET("/api/v1/uploads/:path", UploadsController)
 		router.POST("/api/v1/texts", TextsController)
 		//把后面读取到的静态文件放在/static/下面
 		router.StaticFS("/static", http.FS(staticFiles))
-		//如果没有该地址
+		//如果没有该地址  最后的路由
 		router.NoRoute(func(c *gin.Context) {
 			//获取用户访问的路径
 			path := c.Request.URL.Path
@@ -112,6 +117,46 @@ func main() {
 	//	cmd.Process.Kill()
 	//}
 
+}
+
+func UploadsController(c *gin.Context) {
+	//获取路由里面的path
+	if path := c.Param("path"); path != "" {
+		target := filepath.Join(GetUploadsDir(), path)
+		//服务器通过header告诉浏览器，回送数据的信息
+		c.Header("Content-Description", "File Transfer") //
+		c.Header("Content-Transfer-Encoding", "binary")
+		c.Header("Content-Disposition", "attachment; filename="+path)
+		c.Header("Content-Type", "application/octet-stream") //回送数据的类型
+		c.File(target)                                       //给前端发送任意类型的文件文件 写入
+	} else {
+		c.Status(http.StatusNotFound)
+	}
+}
+func GetUploadsDir() (uploads string) {
+	exe, err := os.Executable() //返回当前运行程序的路径 而os.Getwd()会输出实际的工作目录
+	if err != nil {
+		log.Fatal(err)
+	}
+	dir := filepath.Dir(exe) // filepath.Dir()函数用于返回指定路径中除最后一个元素以外的所有元素。filepath.Dir("/Geeks/GFG/gfg.org") /Geeks/GFG
+	uploads = filepath.Join(dir, "uploads")
+	return
+}
+
+func AddressesController(c *gin.Context) {
+	addr, _ := net.InterfaceAddrs() //获取本地的ip,多个ip地址，要找到能过访问网络的ip
+	var result []string
+	for _, address := range addr {
+		//检查ip地址是否是回环地址  address.(*net.IPNet)断言是这个类型的
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			//To4将一个IPv4地址转换为4字节表示。如果ip不是IPv4地址，To4会返回nil。
+			//To16将一个IP地址转换为16字节表示。如果ip不是一个IP地址（长度错误），To16会返回nil。
+			if ipnet.IP.To4() != nil {
+				result = append(result, ipnet.IP.String())
+			}
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"addresses": result}) //如果地址没问题就把
 }
 func TextsController(c *gin.Context) {
 	var json struct {
