@@ -6,18 +6,18 @@ import (
 	"embed"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/zserge/lorca"
+	"github.com/skip2/go-qrcode"
 	"io/fs"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 //go:embed frontend/dist/*
@@ -27,6 +27,7 @@ import (
 var FS embed.FS
 
 func main() {
+	port := "27149"
 	go func() {
 		gin.SetMode(gin.DebugMode) //gin的模式 debug 生产 测试
 		router := gin.Default()    //新建路由 ，创建生成引擎中间件log和recovery
@@ -38,12 +39,14 @@ func main() {
 		//})
 		//把所有静态文件变成一个变量  获得一个子文件系统 子文件系统的根由第二个参数 dir 指定
 		staticFiles, _ := fs.Sub(FS, "frontend/dist")
-
-		//获取接口
-		router.GET("/api/v1/addresses", AddressesController)
-		//下载文件
 		router.GET("/api/v1/uploads/:path", UploadsController)
+		router.GET("/api/v1/addresses", AddressesController)
+		//获取接口
+		router.GET("/api/v1/qrcodes", QrcodesController)
+		router.POST("/api/v1/files", FilesController)
+		//下载文件
 		router.POST("/api/v1/texts", TextsController)
+
 		//把后面读取到的静态文件放在/static/下面
 		router.StaticFS("/static", http.FS(staticFiles))
 		//如果没有该地址  最后的路由
@@ -87,35 +90,35 @@ func main() {
 			}
 
 		})
-		router.Run(":8080") //如果不开协程，会一直执行，去监听，而不会往下去执行
+		router.Run(":" + port) //如果不开协程，会一直执行，去监听，而不会往下去执行
 	}()
 
-	var ui lorca.UI
-	ui, _ = lorca.New("http://127.0.0.1:8080/static/index.html", "", 1000, 600, "--disable--sync", "--disable-translate")
-	//我们获取ctrl+c的中断，当中断时，关闭ui窗口  搜索golang 优雅退出相关的
-	chSignal := make(chan os.Signal, 1) //只接受操作系统的信号 1 缓冲 通道
-	signal.Notify(chSignal, syscall.SIGINT, syscall.SIGTERM)
-	//syscall.SIGINT  syscall.SIGTERM 订阅信号终止和中断信号，发送给chsignal  https://www.jianshu.com/p/ae72ad58ecb6信号可以在这里面看
-	//syscall.SIGINT就是ctrl+c   syscall.SIGTERM就是系统结束进程的信号对应的就是ctrl+c 和kill
-	//select,等待第一个可以读或写的ch操作
-	//select{}直接将main线程挂起，永远停 只占用很少的资源 其他方式退出，或者唤醒
-	select {
-	case <-ui.Done(): //等待ui结束的信号，这个线程就不动了 阻塞
-	case <-chSignal: //阻塞当前，等chSignal有信号，取出信号，ui关闭
-	}
-	//为什么写后面？ 因为前面两句都是做同样的事情。所以让它放后面执行就行
-	ui.Close()
-	//chromePath := "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-	//cmd := exec.Command(chromePath, "--app=http://127.0.0.1:8080/static/index.html")
-	//cmd.Start()
-
-	//chSignal := make(chan os.Signal, 1)
-	//signal.Notify(chSignal, os.Interrupt)
-	//
+	//var ui lorca.UI
+	//ui, _ = lorca.New("http://127.0.0.1:8080/static/index.html", "", 1000, 600, "--disable--sync", "--disable-translate")
+	////我们获取ctrl+c的中断，当中断时，关闭ui窗口  搜索golang 优雅退出相关的
+	//chSignal := make(chan os.Signal, 1) //只接受操作系统的信号 1 缓冲 通道
+	//signal.Notify(chSignal, syscall.SIGINT, syscall.SIGTERM)
+	////syscall.SIGINT  syscall.SIGTERM 订阅信号终止和中断信号，发送给chsignal  https://www.jianshu.com/p/ae72ad58ecb6信号可以在这里面看
+	////syscall.SIGINT就是ctrl+c   syscall.SIGTERM就是系统结束进程的信号对应的就是ctrl+c 和kill
+	////select,等待第一个可以读或写的ch操作
+	////select{}直接将main线程挂起，永远停 只占用很少的资源 其他方式退出，或者唤醒
 	//select {
-	//case <-chSignal:
-	//	cmd.Process.Kill()
+	//case <-ui.Done(): //等待ui结束的信号，这个线程就不动了 阻塞
+	//case <-chSignal: //阻塞当前，等chSignal有信号，取出信号，ui关闭
 	//}
+	////为什么写后面？ 因为前面两句都是做同样的事情。所以让它放后面执行就行
+	//ui.Close()
+	chromePath := "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+	cmd := exec.Command(chromePath, "--app=http://127.0.0.1:"+port+"/static/index.html")
+	cmd.Start()
+
+	chSignal := make(chan os.Signal, 1)
+	signal.Notify(chSignal, os.Interrupt)
+
+	select {
+	case <-chSignal:
+		cmd.Process.Kill()
+	}
 
 }
 
@@ -192,4 +195,44 @@ func TextsController(c *gin.Context) {
 
 	}
 
+}
+func QrcodesController(c *gin.Context) {
+	//查询字符串
+	if content := c.Query("content"); content != "" {
+		//变成二维码切片
+		png, err := qrcode.Encode(content, qrcode.Medium, 256)
+		if err != nil {
+			log.Fatal(err)
+		}
+		c.Data(http.StatusOK, "image/png", png) //为啥不用file 因为是用来展示的，不是用来下载的 c.File("image/png")是用来下载的图片
+	} else {
+		c.Status(http.StatusBadRequest)
+	}
+}
+func FilesController(c *gin.Context) {
+	//自动读取用户上传的文件
+	file, err := c.FormFile("raw") //前端参数名raw
+	if err != nil {
+		log.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		log.Fatal(err)
+	}
+	dir := filepath.Dir(exe)
+	if err != nil {
+		log.Fatal(err)
+	}
+	filename := uuid.New().String()
+	uploads := filepath.Join(dir, "uploads")
+	err = os.MkdirAll(uploads, os.ModePerm)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fullpath := path.Join("uploads", filename+filepath.Ext(file.Filename)) //保留文件后缀
+	fileErr := c.SaveUploadedFile(file, filepath.Join(dir, fullpath))
+	if fileErr != nil {
+		log.Fatal(fileErr)
+	}
+	c.JSON(http.StatusOK, gin.H{"url": "/" + fullpath})
 }
